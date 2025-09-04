@@ -1,0 +1,152 @@
+C51 COMPILER V9.60.7.0   AT24C02                                                           08/29/2025 17:38:19 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE AT24C02
+OBJECT MODULE PLACED IN .\Objects\AT24C02.obj
+COMPILER INVOKED BY: E:\Keil\C51\BIN\C51.EXE AT24C02.c COMPACT OPTIMIZE(8,SPEED) BROWSE INCDIR(C:\Program Files\Keil_v5\
+                    -C51\INC) DEBUG OBJECTEXTEND PRINT(.\Listings\AT24C02.lst) TABS(2) OBJECT(.\Objects\AT24C02.obj)
+
+line level    source
+
+   1          // AT24C02.c
+   2          #include "AT24C02.h"
+   3           
+   4          /**
+   5            * @brief  AT24C02 写入一个字节
+   6            * @param  WordAddress 要写入字节的地址
+   7            * @param  Data 要写入的数据
+   8            * @retval 无
+   9            */
+  10          void AT24C02_WriteByte(u8 WordAddress, u8 Data)
+  11          {
+  12   1        I2C_Start();
+  13   1        I2C_SendByte(AT24C02_ADDRESS_READ);
+  14   1        I2C_ReceiveAck();
+  15   1        I2C_SendByte(WordAddress);
+  16   1        I2C_ReceiveAck();
+  17   1        I2C_SendByte(Data);
+  18   1        I2C_ReceiveAck();
+  19   1        I2C_Stop();
+  20   1      }
+  21           
+  22          /**
+  23            * @brief  AT24C02读取一个字节
+  24            * @param  WordAddress 要读出字节的地址
+  25            * @retval 读出的数据
+  26            */
+  27          u8 AT24C02_ReadByte(u8 WordAddress)
+  28          {
+  29   1        u8 Data;
+  30   1        I2C_Start();
+  31   1        I2C_SendByte(AT24C02_ADDRESS_READ);
+  32   1        I2C_ReceiveAck();
+  33   1        I2C_SendByte(WordAddress);
+  34   1        I2C_ReceiveAck();
+  35   1        I2C_Start();
+  36   1        // 读地址
+  37   1        I2C_SendByte(AT24C02_ADDRESS_WRITE);
+  38   1        I2C_ReceiveAck();
+  39   1        Data = I2C_ReceiveByte();
+  40   1        I2C_SendAck(1);
+  41   1        I2C_Stop();
+  42   1        return Data;
+  43   1      }
+  44          
+  45          u8 AT24C02_WriteCard(CARD Data, u8 pos) // 按位置写卡，每次写入命令之间需要延时
+  46          {
+  47   1        u8 addr = 0x00 + (ID_LEN + STUID_LEN) * pos, i;
+  48   1        for (i = 0; i < ID_LEN; i++)
+  49   1        {
+  50   2          AT24C02_WriteByte(addr + i, Data.id[i]);
+  51   2          delay_ms(50);
+  52   2        }
+  53   1        for (i = 0; i < STUID_LEN; i++)
+  54   1        {
+C51 COMPILER V9.60.7.0   AT24C02                                                           08/29/2025 17:38:19 PAGE 2   
+
+  55   2          AT24C02_WriteByte(addr + ID_LEN + i, Data.stuid[i]);
+  56   2          delay_ms(50);
+  57   2        }
+  58   1        return 0;
+  59   1      }
+  60          
+  61          // u8* AT24C02_ReadCard(u8* ID)
+  62          // {
+  63          //  u8 addr = 0x00, i, id[ID_LEN], stuid[STUID_LEN] = {0};
+  64          //  for (i = 0; i < ID_LEN; i++)
+  65          //  {
+  66          //    id[i] = AT24C02_ReadByte(addr + i);
+  67          //  }
+  68          //  while (strlen(id))
+  69          //  {
+  70          //    if (!strcmp(ID, id))
+  71          //    {
+  72          //      for (i = 0; i < STUID_LEN; i++)
+  73          //      {
+  74          //        stuid[i] = AT24C02_ReadByte(addr + ID_LEN + i);
+  75          //      }
+  76          //      // for (i = 0; i < NAME_LEN; i++)
+  77          //      // {
+  78          //      //  stu.name[i] = AT24C02_ReadByte(addr + ID_LEN + STUID_LEN + i);
+  79          //      // }
+  80          //    }
+  81          //    else
+  82          //    {
+  83          //      if (addr > 0xFF - (ID_LEN + STUID_LEN))
+  84          //      {
+  85          //        break;
+  86          //      }
+  87          //      addr += ID_LEN + STUID_LEN;
+  88          //      for (i = 0; i < ID_LEN; i++)
+  89          //      {
+  90          //        id[i] = AT24C02_ReadByte(addr + i);
+  91          //      }
+  92          //    }
+  93          //  }
+  94          //  return stuid;
+  95          // }
+  96          
+  97          void AT24C02_ReadCard_pos(u8 pos, CARD *card) // 按位置读卡，每次读取之间需要延时
+  98          {
+  99   1        u8 addr = 0x00 + (ID_LEN + STUID_LEN) * pos, i;
+ 100   1        for (i = 0; i < ID_LEN; i++)
+ 101   1        {
+ 102   2          card->id[i] = AT24C02_ReadByte(addr + i);
+ 103   2          delay_ms(50);
+ 104   2        }
+ 105   1        for (i = 0; i < STUID_LEN; i++)
+ 106   1        {
+ 107   2          card->stuid[i] = AT24C02_ReadByte(addr + ID_LEN + i);
+ 108   2          delay_ms(50);
+ 109   2        }
+ 110   1      }
+ 111          
+ 112          void AT24C02_ReadAll(u8 cards[3][11]) // 读取所有卡（只读取卡号以节省空间）
+ 113          {
+ 114   1        u8 addr = 0x00, i, j;
+ 115   1        for (j = 0; j < 3; j++)
+ 116   1        {
+C51 COMPILER V9.60.7.0   AT24C02                                                           08/29/2025 17:38:19 PAGE 3   
+
+ 117   2          for (i = 0; i < ID_LEN; i++)
+ 118   2          {
+ 119   3            cards[j][i] = AT24C02_ReadByte(addr + i);
+ 120   3            delay_ms(50);
+ 121   3          }
+ 122   2          addr += ID_LEN + STUID_LEN;
+ 123   2        }
+ 124   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    436    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----      38
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
