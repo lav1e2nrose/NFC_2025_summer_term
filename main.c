@@ -16,6 +16,13 @@ MODE mode = MENU, prev_mode;
 extern u8 rec_str[], prt_str[]; // 用于串口数据接收
 extern u32 rec_cnt; // 串口数据量计数
 
+// 已知卡UID和对应学号
+code u8 KNOWN_UID1[] = "4EDA9C04";
+code u8 KNOWN_UID2[] = "87654321";
+code u8 KNOWN_STUID1[] = "3230105625";
+code u8 KNOWN_STUID2[] = "3230105626";
+code u8 UNKNOWN_STUID[] = "0000000000";
+
 void beep() // 蜂鸣 0.5 秒
 {
 	BUZZER = 0;
@@ -37,6 +44,16 @@ void UartInit(void)		// 9600bps @ 11.0592MHz
 	ES = 1;
 }
 
+// 比较两个字符串是否相等
+bit compareUID(u8 *uid1, u8 *uid2)
+{
+    u8 i;
+    for(i = 0; i < 8; i++) {
+        if(uid1[i] != uid2[i])
+            return 0;
+    }
+    return 1;
+}
 
 void Usart() interrupt 4 // 串口中断
 {
@@ -126,7 +143,14 @@ void display() // 负责调整显示内容与业务逻辑
 					{
 						if (check_lu()) // 按下保存按钮的逻辑
 						{
-							strcpy(card.stuid, "3220105800"); // 这里可以改成写入其他学号
+							// 根据UID匹配学号
+							if(compareUID(card.id, KNOWN_UID1)) {
+								strcpy(card.stuid, KNOWN_STUID1);
+							} else if(compareUID(card.id, KNOWN_UID2)) {
+								strcpy(card.stuid, KNOWN_STUID2);
+							} else {
+								strcpy(card.stuid, UNKNOWN_STUID); // 未知卡设为0000000000
+							}
 							data_pos = AT24C02_ReadByte(0xFF); // 从 EEPROM 处读取保存卡的位置（设定为 3 个位置）
 							delay_ms(50);
 							AT24C02_WriteCard(card, data_pos); // 写卡进 EEPROM，包括 ID 和学号
