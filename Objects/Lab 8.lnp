@@ -5,6 +5,7 @@
 ".\Objects\PN532.obj",
 ".\Objects\I2C.obj",
 ".\Objects\utils.obj",
-".\Objects\menu.obj" 
+".\Objects\menu.obj",
+".\Objects\bluetooth.obj" 
 TO ".\Objects\Lab 8" 
 PRINT(".\Listings\Lab 8.m51") RAMSIZE(256) 
