@@ -1,0 +1,1 @@
+"ui.c" OPTIMIZE (8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\ui.lst) TABS (2) OBJECT(.\Objects\ui.obj)

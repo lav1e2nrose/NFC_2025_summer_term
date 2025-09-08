@@ -1,0 +1,1 @@
+"utils.c" OPTIMIZE (8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\utils.lst) TABS (2) OBJECT(.\Objects\utils.obj)

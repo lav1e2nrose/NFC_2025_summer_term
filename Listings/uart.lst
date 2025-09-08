@@ -1,0 +1,161 @@
+C51 COMPILER V9.60.7.0   UART                                                              09/07/2025 15:16:34 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE UART
+OBJECT MODULE PLACED IN .\Objects\uart.obj
+COMPILER INVOKED BY: E:\Keil\C51\BIN\C51.EXE uart.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\uart.ls
+                    -t) TABS(2) OBJECT(.\Objects\uart.obj)
+
+line level    source
+
+   1          #include "uart.h"
+   2          
+   3          // 波特率为9600，晶振11.0592MHz
+   4          // 定时器设置值
+   5          #define TIMER_VALUE (65536 - 11059200/12/9600)
+   6          
+   7          // 接收缓冲区
+   8          static u8 rxBuffer;
+   9          static bit dataReceived = 0;
+  10          
+  11          /**
+  12           * @brief 软件串口初始化
+  13           */
+  14          void SoftUart_Init(void)
+  15          {
+  16   1          // 设置引脚初始状态
+  17   1          UART_TX = 1;  // 空闲状态为高电平
+  18   1          UART_RX = 1;  // 接收引脚设为输入
+  19   1          
+  20   1          // 配置定时器0用于软件串口
+  21   1          TMOD &= 0xF0;  // 清除定时器0的设置位
+  22   1          TMOD |= 0x01;  // 设置定时器0为16位定时器模式
+  23   1          
+  24   1          TH0 = (TIMER_VALUE >> 8) & 0xFF;  // 定时器高8位
+  25   1          TL0 = TIMER_VALUE & 0xFF;         // 定时器低8位
+  26   1          
+  27   1          ET0 = 1;    // 启用定时器0中断
+  28   1          EA = 1;     // 启用全局中断
+  29   1          TR0 = 0;    // 先不启动定时器
+  30   1          
+  31   1          dataReceived = 0; // 初始没有收到数据
+  32   1      }
+  33          
+  34          /**
+  35           * @brief 发送一个字节
+  36           * @param dat 要发送的数据
+  37           */
+  38          void SoftUart_SendByte(u8 dat)
+  39          {
+  40   1          u8 i;
+  41   1          bit parity = 0;  // 校验位
+  42   1          
+  43   1          // 禁用中断防止冲突
+  44   1          EA = 0;
+  45   1          
+  46   1          // 发送起始位(低电平)
+  47   1          UART_TX = 0;
+  48   1          delay_us(104);  // 104us约为1/9600秒
+  49   1          
+  50   1          // 发送8位数据，从LSB开始
+  51   1          for (i = 0; i < 8; i++)
+  52   1          {
+  53   2              UART_TX = (dat & 0x01);  // 发送一位数据
+  54   2              parity ^= (dat & 0x01);  // 更新校验位
+C51 COMPILER V9.60.7.0   UART                                                              09/07/2025 15:16:34 PAGE 2   
+
+  55   2              dat >>= 1;               // 移位到下一位
+  56   2              delay_us(104);           // 每位延时
+  57   2          }
+  58   1          
+  59   1          // 发送停止位(高电平)
+  60   1          UART_TX = 1;
+  61   1          delay_us(104);
+  62   1          
+  63   1          // 恢复中断
+  64   1          EA = 1;
+  65   1      }
+  66          
+  67          /**
+  68           * @brief 发送字符串
+  69           * @param str 要发送的字符串
+  70           */
+  71          void SoftUart_SendString(u8 *str)
+  72          {
+  73   1          while (*str)
+  74   1          {
+  75   2              SoftUart_SendByte(*str++);
+  76   2          }
+  77   1      }
+  78          
+  79          /**
+  80           * @brief 检查是否有数据可以接收
+  81           * @return 有数据返回1，没有返回0
+  82           */
+  83          bit SoftUart_DataReady(void)
+  84          {
+  85   1          return dataReceived;
+  86   1      }
+  87          
+  88          /**
+  89           * @brief 接收一个字节
+  90           * @return 接收到的数据
+  91           */
+  92          u8 SoftUart_ReceiveByte(void)
+  93          {
+  94   1          u8 dat = rxBuffer;
+  95   1          dataReceived = 0;  // 清除数据接收标志
+  96   1          return dat;
+  97   1      }
+  98          
+  99          /**
+ 100           * @brief 接收一个字节(中断方式)
+ 101           * 在外部中断0中使用此函数
+ 102           */
+ 103          void SoftUart_ReceiveByteInt(void) interrupt 0
+ 104          {
+ 105   1          u8 i;
+ 106   1          u8 dat = 0;
+ 107   1          
+ 108   1          // 等待起始位中间
+ 109   1          delay_us(52);
+ 110   1          
+ 111   1          // 检查起始位是否正确
+ 112   1          if (UART_RX == 0)
+ 113   1          {
+ 114   2              // 读取8位数据
+ 115   2              for (i = 0; i < 8; i++)
+ 116   2              {
+C51 COMPILER V9.60.7.0   UART                                                              09/07/2025 15:16:34 PAGE 3   
+
+ 117   3                  delay_us(104);  // 等到下一位中间
+ 118   3                  dat >>= 1;      // 右移一位
+ 119   3                  if (UART_RX)
+ 120   3                      dat |= 0x80;  // 如果是1，设置最高位
+ 121   3              }
+ 122   2              
+ 123   2              // 等待停止位
+ 124   2              delay_us(104);
+ 125   2              
+ 126   2              // 如果停止位正确
+ 127   2              if (UART_RX == 1)
+ 128   2              {
+ 129   3                  rxBuffer = dat;
+ 130   3                  dataReceived = 1;  // 设置数据接收标志
+ 131   3              }
+ 132   2          }
+ 133   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    248    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =      1       7
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      1       1
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

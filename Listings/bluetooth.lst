@@ -1,0 +1,190 @@
+C51 COMPILER V9.60.7.0   BLUETOOTH                                                         09/07/2025 15:25:26 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE BLUETOOTH
+OBJECT MODULE PLACED IN .\Objects\bluetooth.obj
+COMPILER INVOKED BY: E:\Keil\C51\BIN\C51.EXE bluetooth.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\bl
+                    -uetooth.lst) TABS(2) OBJECT(.\Objects\bluetooth.obj)
+
+line level    source
+
+   1          #include "bluetooth.h"
+   2          #include "oled.h"
+   3          
+   4          // 全局变量
+   5          static u8 bt_status = BT_IDLE;          // 蓝牙状态
+   6          static CARD receivedCard;               // 接收到的卡片数据
+   7          static u8 receiveBuffer[20];            // 接收缓冲区
+   8          static u8 receiveIndex = 0;             // 接收索引
+   9          
+  10          /**
+  11           * @brief 蓝牙模块初始化
+  12           */
+  13          void Bluetooth_Init(void)
+  14          {
+  15   1          SoftUart_Init();     // 初始化软件串口
+  16   1          bt_status = BT_IDLE; // 设置初始状态为空闲
+  17   1      }
+  18          
+  19          /**
+  20           * @brief 发送卡片数据
+  21           * @param card 要发送的卡片数据
+  22           */
+  23          void Bluetooth_SendCard(CARD card)
+  24          {
+  25   1          u8 i;
+  26   1          
+  27   1          bt_status = BT_SENDING;  // 设置状态为正在发送
+  28   1          
+  29   1          // 发送起始标记
+  30   1          SoftUart_SendString("CARD:");
+  31   1          
+  32   1          // 发送卡ID
+  33   1          for (i = 0; i < ID_LEN; i++) {
+  34   2              SoftUart_SendByte(card.id[i]);
+  35   2          }
+  36   1          
+  37   1          // 发送分隔符
+  38   1          SoftUart_SendString(",");
+  39   1          
+  40   1          // 发送学生ID
+  41   1          for (i = 0; i < STUID_LEN; i++) {
+  42   2              SoftUart_SendByte(card.stuid[i]);
+  43   2          }
+  44   1          
+  45   1          // 发送结束标记
+  46   1          SoftUart_SendString("#");
+  47   1          
+  48   1          bt_status = BT_FINISHED;  // 设置状态为传输完成
+  49   1          delay_ms(100);            // 延时一段时间
+  50   1          bt_status = BT_IDLE;      // 恢复空闲状态
+  51   1      }
+  52          
+  53          /**
+  54           * @brief 发送所有卡片数据
+C51 COMPILER V9.60.7.0   BLUETOOTH                                                         09/07/2025 15:25:26 PAGE 2   
+
+  55           */
+  56          void Bluetooth_SendAllCards(void)
+  57          {
+  58   1          CARD card;
+  59   1          u8 i;
+  60   1          
+  61   1          for (i = 0; i < 3; i++) {  // 假设有3张卡
+  62   2              AT24C02_ReadCard_pos(i, &card);  // 读取卡片数据
+  63   2              Bluetooth_SendCard(card);        // 发送卡片数据
+  64   2              delay_ms(500);                   // 两张卡之间延迟
+  65   2          }
+  66   1      }
+  67          
+  68          /**
+  69           * @brief 获取当前蓝牙状态
+  70           * @return 蓝牙状态
+  71           */
+  72          u8 Bluetooth_GetStatus(void)
+  73          {
+  74   1          return bt_status;
+  75   1      }
+  76          
+  77          /**
+  78           * @brief 处理接收到的数据
+  79           * 解析接收到的数据并保存
+  80           */
+  81          void Bluetooth_ProcessReceivedData(void)
+  82          {
+  83   1          // 简单的解析：CARD:ID数据,STUID数据#
+  84   1          u8 i = 5;  // 跳过"CARD:"
+  85   1          u8 j = 0;
+  86   1          
+  87   1          // 提取ID
+  88   1          while (i < receiveIndex && receiveBuffer[i] != ',') {
+  89   2              if (j < ID_LEN) {
+  90   3                  receivedCard.id[j++] = receiveBuffer[i++];
+  91   3              } else {
+  92   3                  i++;  // 避免数组越界
+  93   3              }
+  94   2          }
+  95   1          
+  96   1          // 填充剩余ID空间
+  97   1          while (j < ID_LEN) {
+  98   2              receivedCard.id[j++] = 0;
+  99   2          }
+ 100   1          
+ 101   1          // 跳过逗号
+ 102   1          i++;
+ 103   1          
+ 104   1          // 提取STUID
+ 105   1          j = 0;
+ 106   1          while (i < receiveIndex && receiveBuffer[i] != '#') {
+ 107   2              if (j < STUID_LEN) {
+ 108   3                  receivedCard.stuid[j++] = receiveBuffer[i++];
+ 109   3              } else {
+ 110   3                  i++;  // 避免数组越界
+ 111   3              }
+ 112   2          }
+ 113   1          
+ 114   1          // 填充剩余STUID空间
+ 115   1          while (j < STUID_LEN) {
+ 116   2              receivedCard.stuid[j++] = 0;
+C51 COMPILER V9.60.7.0   BLUETOOTH                                                         09/07/2025 15:25:26 PAGE 3   
+
+ 117   2          }
+ 118   1          
+ 119   1          // 保存到EEPROM (可选)
+ 120   1          // AT24C02_WriteCard(receivedCard, 0);  // 存储到第一个位置
+ 121   1          
+ 122   1          // 重置接收缓冲区
+ 123   1          receiveIndex = 0;
+ 124   1      }
+ 125          
+ 126          /**
+ 127           * @brief 接收数据
+ 128           * 在主循环中调用，检查是否有数据接收
+ 129           */
+ 130          void Bluetooth_Process(void)
+ 131          {
+ 132   1          // 检查是否有数据接收
+ 133   1          if (SoftUart_DataReady())
+ 134   1          {
+ 135   2              u8 dat = SoftUart_ReceiveByte();
+ 136   2              
+ 137   2              // 如果之前是空闲状态，且接收到'C'，开始接收
+ 138   2              if (bt_status == BT_IDLE && dat == 'C' && receiveIndex == 0)
+ 139   2              {
+ 140   3                  bt_status = BT_RECEIVING;
+ 141   3                  receiveBuffer[receiveIndex++] = dat;
+ 142   3              }
+ 143   2              // 如果正在接收数据
+ 144   2              else if (bt_status == BT_RECEIVING)
+ 145   2              {
+ 146   3                  // 存入接收缓冲区
+ 147   3                  if (receiveIndex < 20)
+ 148   3                  {
+ 149   4                      receiveBuffer[receiveIndex++] = dat;
+ 150   4                  }
+ 151   3                  
+ 152   3                  // 检查是否接收完成
+ 153   3                  if (dat == '#')
+ 154   3                  {
+ 155   4                      Bluetooth_ProcessReceivedData();
+ 156   4                      bt_status = BT_FINISHED;
+ 157   4                      delay_ms(100);
+ 158   4                      bt_status = BT_IDLE;
+ 159   4                  }
+ 160   3              }
+ 161   2          }
+ 162   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    365    ----
+   CONSTANT SIZE    =     10    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     42      43
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
