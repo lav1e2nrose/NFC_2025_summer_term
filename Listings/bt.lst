@@ -1,0 +1,120 @@
+C51 COMPILER V9.60.7.0   BT                                                                09/08/2025 19:15:10 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE BT
+OBJECT MODULE PLACED IN .\Objects\bt.obj
+COMPILER INVOKED BY: E:\Keil\C51\BIN\C51.EXE bt.c COMPACT OPTIMIZE(8,SPEED) BROWSE INCDIR(C:\Program Files\Keil_v5\C51\I
+                    -NC) DEBUG OBJECTEXTEND PRINT(.\Listings\bt.lst) TABS(2) OBJECT(.\Objects\bt.obj)
+
+line level    source
+
+   1          #include "bt.h"
+*** ERROR C141 IN LINE 21 OF utils.h: syntax error near ',', expected '<id>'
+   2          #include "soft_uart.h"
+   3          
+   4          /* 避免与工程里的 _checksum8/宏冲突，使用文件内私有校验函数 */
+   5          static unsigned char bt_checksum8(const unsigned char* data, unsigned char len)
+*** ERROR C141 IN LINE 5 OF bt.c: syntax error near ',', expected '<id>'
+   6          {
+   7   1          unsigned int i;
+   8   1          unsigned int sum = 0;
+   9   1          for (i = 0; i < len; i++) sum += data[i];
+*** ERROR C141 IN LINE 9 OF bt.c: syntax error near 'data', expected 'sizeof'
+  10   1          return (unsigned char)(sum & 0xFF);
+  11   1      }
+  12          
+  13          static void build_frame(const CARD* card, unsigned char* frame /* len = BT_FRAME_LEN */)
+  14          {
+  15   1          unsigned char i, cks;
+  16   1          unsigned char* p = frame;
+  17   1          *p++ = BT_HDR0;
+  18   1          *p++ = BT_HDR1;
+  19   1          *p++ = BT_TYPE_CARD;
+  20   1          *p++ = BT_PAYLOAD_LEN;
+  21   1          /* Payload: ID(9) + STUID(11) */
+  22   1          for (i = 0; i < ID_LEN; i++)    *p++ = card->id[i];
+  23   1          for (i = 0; i < STUID_LEN; i++) *p++ = card->stuid[i];
+  24   1          /* Checksum over Type + Len + Payload */
+  25   1          cks = bt_checksum8(&frame[2], (unsigned char)(1 + 1 + BT_PAYLOAD_LEN));
+*** ERROR C208 IN LINE 25 OF bt.c: '_bt_checksum8': too many actual parameters
+  26   1          *p++ = cks;
+  27   1      }
+  28          
+  29          void BT_Init(void)
+  30          {
+  31   1          SUART_Init();
+  32   1      }
+  33          
+  34          bit BT_SendCard(const CARD* card)
+  35          {
+  36   1          unsigned char frame[BT_FRAME_LEN];
+  37   1          build_frame(card, frame);
+  38   1          SUART_SendBuffer(frame, sizeof(frame));
+  39   1          return 1;
+  40   1      }
+  41          
+  42          static bit recv_byte_within(unsigned char* b, unsigned int* remain_ms)
+  43          {
+  44   1          /* 每字节限时不超过剩余总时长与单字节最大时长 */
+  45   1          unsigned int budget = (*remain_ms > BT_BYTE_TIMEOUT_MS) ? BT_BYTE_TIMEOUT_MS : *remain_ms;
+  46   1          bit ok = SUART_RecvByteTimeout(b, budget);
+  47   1          if (budget <= *remain_ms) *remain_ms -= budget;
+  48   1          else *remain_ms = 0;
+  49   1          return ok;
+  50   1      }
+C51 COMPILER V9.60.7.0   BT                                                                09/08/2025 19:15:10 PAGE 2   
+
+  51          
+  52          bit BT_RecvCard(CARD* out, unsigned int timeout_ms)
+  53          {
+  54   1          unsigned char b, hdr_ok = 0;
+  55   1          unsigned char type, len, i;
+  56   1          unsigned char payload[BT_PAYLOAD_LEN];
+  57   1          unsigned char cks, cks_calc;
+  58   1      
+  59   1          /* 寻找帧头 0x55 0xAA */
+  60   1          while (timeout_ms)
+  61   1          {
+  62   2              if (!recv_byte_within(&b, &timeout_ms)) return 0;
+  63   2              if (!hdr_ok)
+  64   2              {
+  65   3                  if (b == BT_HDR0) { hdr_ok = 1; }
+  66   3              }
+  67   2              else
+  68   2              {
+  69   3                  if (b == BT_HDR1) break; /* 找到头 */
+  70   3                  else hdr_ok = (b == BT_HDR0) ? 1 : 0; /* 允许重复 0x55 */
+  71   3              }
+  72   2          }
+  73   1          if (!timeout_ms) return 0;
+  74   1      
+  75   1          /* Type */
+  76   1          if (!recv_byte_within(&type, &timeout_ms)) return 0;
+  77   1          /* Len */
+  78   1          if (!recv_byte_within(&len, &timeout_ms)) return 0;
+  79   1          if (type != BT_TYPE_CARD || len != BT_PAYLOAD_LEN) return 0;
+  80   1      
+  81   1          /* Payload */
+  82   1          for (i = 0; i < BT_PAYLOAD_LEN; i++)
+  83   1          {
+  84   2              if (!recv_byte_within(&payload[i], &timeout_ms)) return 0;
+  85   2          }
+  86   1          /* Checksum */
+  87   1          if (!recv_byte_within(&cks, &timeout_ms)) return 0;
+  88   1      
+  89   1          cks_calc = bt_checksum8(&type, 1);
+*** ERROR C208 IN LINE 89 OF bt.c: '_bt_checksum8': too many actual parameters
+  90   1          cks_calc = (unsigned char)(cks_calc + bt_checksum8(&len, 1));
+*** ERROR C208 IN LINE 90 OF bt.c: '_bt_checksum8': too many actual parameters
+  91   1          cks_calc = (unsigned char)(cks_calc + bt_checksum8(payload, BT_PAYLOAD_LEN));
+*** ERROR C208 IN LINE 91 OF bt.c: '_bt_checksum8': too many actual parameters
+  92   1          if (cks_calc != cks) return 0;
+  93   1      
+  94   1          /* 拆回 CARD */
+  95   1          for (i = 0; i < ID_LEN; i++) out->id[i] = payload[i];
+  96   1          for (i = 0; i < STUID_LEN; i++) out->stuid[i] = payload[ID_LEN + i];
+  97   1      
+  98   1          return 1;
+  99   1      }
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  7 ERROR(S)

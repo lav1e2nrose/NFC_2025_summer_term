@@ -3,6 +3,7 @@
 #include "PN532.h"
 #include "AT24C02.h"
 #include "menu.h"
+#include "bluetooth.h"
 
 typedef enum mode // 模式来标识各个页面
 {
@@ -213,16 +214,69 @@ void display() // 负责调整显示内容与业务逻辑
 			select = NO;
 			break;
         }
-		case BTTD:
+case BTTD:
+{
+    CARD card, rx;
+    unsigned char pos_eep;
+    title = "BlueTooth - TD";
+    strcpy(list[0], "LU:Send        ");
+    strcpy(list[1], "LD:Recv        ");
+    strcpy(list[2], "RU:Menu RD:Back");
+    length = 3;
+    select = NO;
+
+    while (1)
+    {
+        display_list(title, list, length, pos, select);
+
+        if (check_ru()) { prev_mode = mode; mode = MENU; OLED_Clear(); break; }
+        if (check_rd()) { mode = BT; OLED_Clear(); break; }
+
+        if (check_lu())  /* 发送 */
         {
-            title = "BlueTooth - TD";
-			strcpy(list[0], "Transferring...");
-			strcpy(list[1], "MENU         UP");
-			strcpy(list[2], "BACK       DOWN");
-			length = 3;
-			select = NO;
-			break;
+            pos_eep = AT24C02_ReadByte(0xFF); delay_ms(50);
+            AT24C02_ReadCard_pos(pos_eep, &card);
+
+            OLED_Clear();
+            OLED_ShowString(0,0,(u8*)"Sending...");
+            OLED_ShowString(0,2,(u8*)"ID:");
+            OLED_ShowString(24,2, card.id);
+            OLED_ShowString(0,4,(u8*)"STU:");
+            OLED_ShowString(32,4, card.stuid);
+
+            BT_SendCardFrame(&card);
+
+            OLED_Clear();
+            OLED_ShowString(0,0,(u8*)"Sent OK");
+            delay_ms(800);
+
+            pos_eep = (pos_eep == 2) ? 0 : (pos_eep + 1);
+            AT24C02_WriteByte(0xFF, pos_eep); delay_ms(50);
         }
+
+        if (check_ld())  /* 接收 */
+        {
+            OLED_Clear();
+            OLED_ShowString(0,0,(u8*)"Receiving...");
+            if (BT_RecvCardFrame(&rx, 3000))
+            {
+                OLED_Clear();
+                OLED_ShowString(0,0,(u8*)"Recv OK");
+                OLED_ShowString(0,2,(u8*)"ID:");
+                OLED_ShowString(24,2, rx.id);
+                OLED_ShowString(0,4,(u8*)"STU:");
+                OLED_ShowString(32,4, rx.stuid);
+            }
+            else
+            {
+                OLED_Clear();
+                OLED_ShowString(0,0,(u8*)"Recv Timeout");
+            }
+            delay_ms(800);
+        }
+    }
+    break;
+}
 		case EEPROM:
 		{
 			title = "EEPROM";

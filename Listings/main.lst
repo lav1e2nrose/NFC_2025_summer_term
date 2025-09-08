@@ -1,4 +1,4 @@
-C51 COMPILER V9.60.7.0   MAIN                                                              09/05/2025 14:42:14 PAGE 1   
+C51 COMPILER V9.60.7.0   MAIN                                                              09/08/2025 21:00:07 PAGE 1   
 
 
 C51 COMPILER V9.60.7.0, COMPILATION OF MODULE MAIN
@@ -13,353 +13,409 @@ line level    source
    3          #include "PN532.h"
    4          #include "AT24C02.h"
    5          #include "menu.h"
-   6          
-   7          typedef enum mode // 模式来标识各个页面
-   8          {
-   9              MENU, PN532, BT, EEPROM, PN532READ, PN532WRITE, PN532CARD, PN532P2P, BTTD, DATA
-  10          } MODE;
-  11          
-  12          sbit BUZZER = P2^7; // 蜂鸣器
-  13          
-  14          MODE mode = MENU, prev_mode;
-  15          
-  16          extern u8 rec_str[], prt_str[]; // 用于串口数据接收
-  17          extern u32 rec_cnt; // 串口数据量计数
-  18          
-  19          // 已知卡UID和对应学号
-  20          code u8 KNOWN_UID1[] = "4EDA9C04";
-  21          code u8 KNOWN_UID2[] = "87654321";
-  22          code u8 KNOWN_STUID1[] = "3230105625";
-  23          code u8 KNOWN_STUID2[] = "3230105626";
-  24          code u8 UNKNOWN_STUID[] = "0000000000";
-  25          
-  26          void beep() // 蜂鸣 0.5 秒
-  27          {
-  28   1        BUZZER = 0;
-  29   1        delay_ms(500);
-  30   1        BUZZER = 1;
-  31   1      }
-  32          
-  33          void UartInit(void)   // 9600bps @ 11.0592MHz
-  34          {
-  35   1        PCON |= 0x80;   // 使能波特率倍速位 SMOD
-  36   1        SCON = 0x50;    // 8 位数据，可变波特率
-  37   1        TMOD &= 0x0F;   // 清除定时器 1 模式位
-  38   1        TMOD |= 0x20;   // 设定定时器 1 为 8 位自动重装方式
-  39   1        TL1 = 0xFA;   // 设定定时初值
-  40   1        TH1 = 0xFA;   // 设定定时器重装值
-  41   1        ET1 = 0;    // 禁止定时器 1 中断
-  42   1        TR1 = 1;    // 启动定时器 1
-  43   1        EA = 1;
-  44   1        ES = 1;
-  45   1      }
-  46          
-  47          // 比较两个字符串是否相等
-  48          bit compareUID(u8 *uid1, u8 *uid2)
-  49          {
-  50   1          u8 i;
-  51   1          for(i = 0; i < 8; i++) {
-  52   2              if(uid1[i] != uid2[i])
-  53   2                  return 0;
-  54   2          }
-C51 COMPILER V9.60.7.0   MAIN                                                              09/05/2025 14:42:14 PAGE 2   
+   6          #include "bluetooth.h"
+   7          
+   8          typedef enum mode // 模式来标识各个页面
+   9          {
+  10              MENU, PN532, BT, EEPROM, PN532READ, PN532WRITE, PN532CARD, PN532P2P, BTTD, DATA
+  11          } MODE;
+  12          
+  13          sbit BUZZER = P2^7; // 蜂鸣器
+  14          
+  15          MODE mode = MENU, prev_mode;
+  16          
+  17          extern u8 rec_str[], prt_str[]; // 用于串口数据接收
+  18          extern u32 rec_cnt; // 串口数据量计数
+  19          
+  20          // 已知卡UID和对应学号
+  21          code u8 KNOWN_UID1[] = "4EDA9C04";
+  22          code u8 KNOWN_UID2[] = "87654321";
+  23          code u8 KNOWN_STUID1[] = "3230105625";
+  24          code u8 KNOWN_STUID2[] = "3230105626";
+  25          code u8 UNKNOWN_STUID[] = "0000000000";
+  26          
+  27          void beep() // 蜂鸣 0.5 秒
+  28          {
+  29   1        BUZZER = 0;
+  30   1        delay_ms(500);
+  31   1        BUZZER = 1;
+  32   1      }
+  33          
+  34          void UartInit(void)   // 9600bps @ 11.0592MHz
+  35          {
+  36   1        PCON |= 0x80;   // 使能波特率倍速位 SMOD
+  37   1        SCON = 0x50;    // 8 位数据，可变波特率
+  38   1        TMOD &= 0x0F;   // 清除定时器 1 模式位
+  39   1        TMOD |= 0x20;   // 设定定时器 1 为 8 位自动重装方式
+  40   1        TL1 = 0xFA;   // 设定定时初值
+  41   1        TH1 = 0xFA;   // 设定定时器重装值
+  42   1        ET1 = 0;    // 禁止定时器 1 中断
+  43   1        TR1 = 1;    // 启动定时器 1
+  44   1        EA = 1;
+  45   1        ES = 1;
+  46   1      }
+  47          
+  48          // 比较两个字符串是否相等
+  49          bit compareUID(u8 *uid1, u8 *uid2)
+  50          {
+  51   1          u8 i;
+  52   1          for(i = 0; i < 8; i++) {
+  53   2              if(uid1[i] != uid2[i])
+  54   2                  return 0;
+C51 COMPILER V9.60.7.0   MAIN                                                              09/08/2025 21:00:07 PAGE 2   
 
-  55   1          return 1;
-  56   1      }
-  57          
-  58          void Usart() interrupt 4 // 串口中断
-  59          {
-  60   1        EA = 0;
-  61   1        rec_str[rec_cnt++] = SBUF;
-  62   1        RI = 0; // 清除接收中断标志位
-  63   1        EA = 1;
-  64   1      }
-  65          
-  66          void display() // 负责调整显示内容与业务逻辑
-  67          {
-  68   1          u8 *title, idata list[4][16], idata buffer[14] = {0}, i, idata cards[3][11], length, pos = 0, id[9], s
+  55   2          }
+  56   1          return 1;
+  57   1      }
+  58          
+  59          void Usart() interrupt 4 // 串口中断
+  60          {
+  61   1        EA = 0;
+  62   1        rec_str[rec_cnt++] = SBUF;
+  63   1        RI = 0; // 清除接收中断标志位
+  64   1        EA = 1;
+  65   1      }
+  66          
+  67          void display() // 负责调整显示内容与业务逻辑
+  68          {
+  69   1          u8 *title, idata list[4][16], idata buffer[14] = {0}, i, idata cards[3][11], length, pos = 0, id[9], s
              -tuid[11], data_pos;
-  69   1        MODE mode_list[5];
-  70   1        SELECT select;
-  71   1        CARD idata card;
-  72   1        switch (mode)
-  73   1        {
-  74   2          case PN532READ: case PN532WRITE: case PN532CARD: case PN532P2P: case BTTD: case DATA:
-  75   2          {
-  76   3            if (check_lu())
-  77   3            {
-  78   4              prev_mode = mode;
-  79   4              mode = MENU;
-  80   4              OLED_Clear();
-  81   4            }
-  82   3            break;
-  83   3          }
-  84   2        }
-  85   1          switch(mode)
-  86   1          {
-  87   2              case MENU: // 显示菜单
-  88   2              {
-  89   3                  title = "MENU";
-  90   3            strcpy(list[0], "PN532         ");
-  91   3            strcpy(list[1], "BlueTooth     ");
-  92   3            strcpy(list[2], "EEPROM        ");
-  93   3            length = 3;
-  94   3            select = YES;
-  95   3            break;
-  96   3              }
-  97   2          case PN532: // PN532 选项
-  98   2              {
-  99   3                  title = "PN532";
- 100   3            strcpy(list[0], "Read          ");
- 101   3            strcpy(list[1], "Write         ");
- 102   3            strcpy(list[2], "Card          ");
- 103   3            strcpy(list[3], "P2P           ");
- 104   3            length = 4;
- 105   3            select = YES;
- 106   3            break;
- 107   3              }
- 108   2          case BT: // 蓝牙选项
- 109   2              {
- 110   3                  title = "BlueTooth";
- 111   3            strcpy(list[0], "Transfer Data ");
- 112   3            length = 1;
- 113   3            select = YES;
- 114   3            break;
- 115   3              }
-C51 COMPILER V9.60.7.0   MAIN                                                              09/05/2025 14:42:14 PAGE 3   
+  70   1        MODE mode_list[5];
+  71   1        SELECT select;
+  72   1        CARD idata card;
+  73   1        switch (mode)
+  74   1        {
+  75   2          case PN532READ: case PN532WRITE: case PN532CARD: case PN532P2P: case BTTD: case DATA:
+  76   2          {
+  77   3            if (check_lu())
+  78   3            {
+  79   4              prev_mode = mode;
+  80   4              mode = MENU;
+  81   4              OLED_Clear();
+  82   4            }
+  83   3            break;
+  84   3          }
+  85   2        }
+  86   1          switch(mode)
+  87   1          {
+  88   2              case MENU: // 显示菜单
+  89   2              {
+  90   3                  title = "MENU";
+  91   3            strcpy(list[0], "PN532         ");
+  92   3            strcpy(list[1], "BlueTooth     ");
+  93   3            strcpy(list[2], "EEPROM        ");
+  94   3            length = 3;
+  95   3            select = YES;
+  96   3            break;
+  97   3              }
+  98   2          case PN532: // PN532 选项
+  99   2              {
+ 100   3                  title = "PN532";
+ 101   3            strcpy(list[0], "Read          ");
+ 102   3            strcpy(list[1], "Write         ");
+ 103   3            strcpy(list[2], "Card          ");
+ 104   3            strcpy(list[3], "P2P           ");
+ 105   3            length = 4;
+ 106   3            select = YES;
+ 107   3            break;
+ 108   3              }
+ 109   2          case BT: // 蓝牙选项
+ 110   2              {
+ 111   3                  title = "BlueTooth";
+ 112   3            strcpy(list[0], "Transfer Data ");
+ 113   3            length = 1;
+ 114   3            select = YES;
+ 115   3            break;
+C51 COMPILER V9.60.7.0   MAIN                                                              09/08/2025 21:00:07 PAGE 3   
 
- 116   2          case PN532READ: // 读卡界面
- 117   2              {
- 118   3                  title = "PN532 - Read";
- 119   3            length = 3;
- 120   3            select = NO;
- 121   3      
- 122   3            rec_cnt = 0;
- 123   3            PN532_findUID(); // 先渲染读卡中界面，同时发送寻卡指令
- 124   3            strcpy(list[0], "Reading...");
- 125   3            strcpy(list[1], "MENU         UP");
- 126   3            strcpy(list[2], "BACK       DOWN");
- 127   3            display_list(title, list, length, pos, select);
- 128   3      
- 129   3            while (1) // 进入死循环等待读到卡
- 130   3            {
- 131   4              if (rec_cnt > 15)
- 132   4              {
- 133   5                rec_cnt = 0;
- 134   5                beep(); // 蜂鸣提示
- 135   5                trans_uid();
- 136   5                strncpy(buffer, prt_str, 8); // 准备显示卡号
- 137   5                strcpy(card.id, buffer);
- 138   5                strcpy(list[0], strcat(buffer, "  "));
- 139   5                strcpy(list[1], "SAVE            ");
- 140   5                strcpy(list[2], "BACK            ");
- 141   5                display_list(title, list, length, pos, select);
- 142   5                while (1) // 进入死循环等待保存 / 不保存
- 143   5                {
- 144   6                  if (check_lu()) // 按下保存按钮的逻辑
- 145   6                  {
- 146   7                    // 根据UID匹配学号
- 147   7                    if(compareUID(card.id, KNOWN_UID1)) {
- 148   8                      strcpy(card.stuid, KNOWN_STUID1);
- 149   8                    } else if(compareUID(card.id, KNOWN_UID2)) {
- 150   8                      strcpy(card.stuid, KNOWN_STUID2);
- 151   8                    } else {
- 152   8                      strcpy(card.stuid, UNKNOWN_STUID); // 未知卡设为0000000000
- 153   8                    }
- 154   7                    data_pos = AT24C02_ReadByte(0xFF); // 从 EEPROM 处读取保存卡的位置（设定为 3 个位�
+ 116   3              }
+ 117   2          case PN532READ: // 读卡界面
+ 118   2              {
+ 119   3                  title = "PN532 - Read";
+ 120   3            length = 3;
+ 121   3            select = NO;
+ 122   3      
+ 123   3            rec_cnt = 0;
+ 124   3            PN532_findUID(); // 先渲染读卡中界面，同时发送寻卡指令
+ 125   3            strcpy(list[0], "Reading...");
+ 126   3            strcpy(list[1], "MENU         UP");
+ 127   3            strcpy(list[2], "BACK       DOWN");
+ 128   3            display_list(title, list, length, pos, select);
+ 129   3      
+ 130   3            while (1) // 进入死循环等待读到卡
+ 131   3            {
+ 132   4              if (rec_cnt > 15)
+ 133   4              {
+ 134   5                rec_cnt = 0;
+ 135   5                beep(); // 蜂鸣提示
+ 136   5                trans_uid();
+ 137   5                strncpy(buffer, prt_str, 8); // 准备显示卡号
+ 138   5                strcpy(card.id, buffer);
+ 139   5                strcpy(list[0], strcat(buffer, "  "));
+ 140   5                strcpy(list[1], "SAVE            ");
+ 141   5                strcpy(list[2], "BACK            ");
+ 142   5                display_list(title, list, length, pos, select);
+ 143   5                while (1) // 进入死循环等待保存 / 不保存
+ 144   5                {
+ 145   6                  if (check_lu()) // 按下保存按钮的逻辑
+ 146   6                  {
+ 147   7                    // 根据UID匹配学号
+ 148   7                    if(compareUID(card.id, KNOWN_UID1)) {
+ 149   8                      strcpy(card.stuid, KNOWN_STUID1);
+ 150   8                    } else if(compareUID(card.id, KNOWN_UID2)) {
+ 151   8                      strcpy(card.stuid, KNOWN_STUID2);
+ 152   8                    } else {
+ 153   8                      strcpy(card.stuid, UNKNOWN_STUID); // 未知卡设为0000000000
+ 154   8                    }
+ 155   7                    data_pos = AT24C02_ReadByte(0xFF); // 从 EEPROM 处读取保存卡的位置（设定为 3 个位�
              -�）
- 155   7                    delay_ms(50);
- 156   7                    AT24C02_WriteCard(card, data_pos); // 写卡进 EEPROM，包括 ID 和学号
- 157   7                    data_pos = (data_pos == 2)? 0: (data_pos + 1);
- 158   7                    delay_ms(50);
- 159   7                    AT24C02_WriteByte(0xFF, data_pos); // 写保存位置入 EEPROM
- 160   7                    mode = MENU; // 重新渲染菜单
- 161   7                    title = "MENU";
- 162   7                    strcpy(list[0], "PN532         ");
- 163   7                    strcpy(list[1], "BlueTooth     ");
- 164   7                    strcpy(list[2], "EEPROM        ");
- 165   7                    select = YES;
- 166   7                    OLED_Clear();
- 167   7                    break;
- 168   7                  }
- 169   6                  if (check_ld())
- 170   6                  {
- 171   7                    mode = MENU;
- 172   7                    title = "MENU";
- 173   7                    strcpy(list[0], "PN532         ");
- 174   7                    strcpy(list[1], "BlueTooth     ");
- 175   7                    strcpy(list[2], "EEPROM        ");
- 176   7                    select = YES;
-C51 COMPILER V9.60.7.0   MAIN                                                              09/05/2025 14:42:14 PAGE 4   
+ 156   7                    delay_ms(50);
+ 157   7                    AT24C02_WriteCard(card, data_pos); // 写卡进 EEPROM，包括 ID 和学号
+ 158   7                    data_pos = (data_pos == 2)? 0: (data_pos + 1);
+ 159   7                    delay_ms(50);
+ 160   7                    AT24C02_WriteByte(0xFF, data_pos); // 写保存位置入 EEPROM
+ 161   7                    mode = MENU; // 重新渲染菜单
+ 162   7                    title = "MENU";
+ 163   7                    strcpy(list[0], "PN532         ");
+ 164   7                    strcpy(list[1], "BlueTooth     ");
+ 165   7                    strcpy(list[2], "EEPROM        ");
+ 166   7                    select = YES;
+ 167   7                    OLED_Clear();
+ 168   7                    break;
+ 169   7                  }
+ 170   6                  if (check_ld())
+ 171   6                  {
+ 172   7                    mode = MENU;
+ 173   7                    title = "MENU";
+ 174   7                    strcpy(list[0], "PN532         ");
+ 175   7                    strcpy(list[1], "BlueTooth     ");
+ 176   7                    strcpy(list[2], "EEPROM        ");
+C51 COMPILER V9.60.7.0   MAIN                                                              09/08/2025 21:00:07 PAGE 4   
 
- 177   7                    OLED_Clear();
- 178   7                    break;
- 179   7                  }
- 180   6                }
- 181   5                break;
- 182   5              }
- 183   4            }
- 184   3            break;
- 185   3              }
- 186   2          case PN532WRITE:
- 187   2              {
- 188   3                  title = "PN532 - Write";
- 189   3            strcpy(list[0], "Writing...");
- 190   3            strcpy(list[1], "MENU         UP");
- 191   3            strcpy(list[2], "BACK       DOWN");
- 192   3            length = 3;
- 193   3            select = NO;
- 194   3            break;
- 195   3              }
- 196   2          case PN532CARD:
- 197   2              {
- 198   3                  title = "PN532 - Card";
- 199   3            strcpy(list[0], "Simulating...");
- 200   3            strcpy(list[1], "MENU         UP");
- 201   3            strcpy(list[2], "BACK       DOWN");
- 202   3            length = 3;
- 203   3            select = NO;
- 204   3            break;
- 205   3              }
- 206   2          case PN532P2P:
- 207   2              {
- 208   3                  title = "PN532 - P2P";
- 209   3            strcpy(list[0], "Connecting...");
- 210   3            strcpy(list[1], "MENU         UP");
- 211   3            strcpy(list[2], "BACK       DOWN");
- 212   3            length = 3;
- 213   3            select = NO;
- 214   3            break;
- 215   3              }
- 216   2          case BTTD:
- 217   2              {
- 218   3                  title = "BlueTooth - TD";
- 219   3            strcpy(list[0], "Transferring...");
- 220   3            strcpy(list[1], "MENU         UP");
- 221   3            strcpy(list[2], "BACK       DOWN");
- 222   3            length = 3;
- 223   3            select = NO;
- 224   3            break;
- 225   3              }
- 226   2          case EEPROM:
- 227   2          {
- 228   3            title = "EEPROM";
- 229   3            AT24C02_ReadAll(cards); // 从 EEPROM 读取所有卡号
- 230   3            for (i = 0; i < 3; i++)
- 231   3            {
- 232   4              strcpy(list[i], cards[i]);
- 233   4            }
- 234   3            length = i;
- 235   3            select = YES;
- 236   3            break;
- 237   3          }
- 238   2          case DATA:
-C51 COMPILER V9.60.7.0   MAIN                                                              09/05/2025 14:42:14 PAGE 5   
+ 177   7                    select = YES;
+ 178   7                    OLED_Clear();
+ 179   7                    break;
+ 180   7                  }
+ 181   6                }
+ 182   5                break;
+ 183   5              }
+ 184   4            }
+ 185   3            break;
+ 186   3              }
+ 187   2          case PN532WRITE:
+ 188   2              {
+ 189   3                  title = "PN532 - Write";
+ 190   3            strcpy(list[0], "Writing...");
+ 191   3            strcpy(list[1], "MENU         UP");
+ 192   3            strcpy(list[2], "BACK       DOWN");
+ 193   3            length = 3;
+ 194   3            select = NO;
+ 195   3            break;
+ 196   3              }
+ 197   2          case PN532CARD:
+ 198   2              {
+ 199   3                  title = "PN532 - Card";
+ 200   3            strcpy(list[0], "Simulating...");
+ 201   3            strcpy(list[1], "MENU         UP");
+ 202   3            strcpy(list[2], "BACK       DOWN");
+ 203   3            length = 3;
+ 204   3            select = NO;
+ 205   3            break;
+ 206   3              }
+ 207   2          case PN532P2P:
+ 208   2              {
+ 209   3                  title = "PN532 - P2P";
+ 210   3            strcpy(list[0], "Connecting...");
+ 211   3            strcpy(list[1], "MENU         UP");
+ 212   3            strcpy(list[2], "BACK       DOWN");
+ 213   3            length = 3;
+ 214   3            select = NO;
+ 215   3            break;
+ 216   3              }
+ 217   2      case BTTD:
+ 218   2      {
+ 219   3          CARD card, rx;
+ 220   3          unsigned char pos_eep;
+ 221   3          title = "BlueTooth - TD";
+ 222   3          strcpy(list[0], "LU:Send        ");
+ 223   3          strcpy(list[1], "LD:Recv        ");
+ 224   3          strcpy(list[2], "RU:Menu RD:Back");
+ 225   3          length = 3;
+ 226   3          select = NO;
+ 227   3      
+ 228   3          while (1)
+ 229   3          {
+ 230   4              display_list(title, list, length, pos, select);
+ 231   4      
+ 232   4              if (check_ru()) { prev_mode = mode; mode = MENU; OLED_Clear(); break; }
+ 233   4              if (check_rd()) { mode = BT; OLED_Clear(); break; }
+ 234   4      
+ 235   4              if (check_lu())  /* 发送 */
+ 236   4              {
+ 237   5                  pos_eep = AT24C02_ReadByte(0xFF); delay_ms(50);
+ 238   5                  AT24C02_ReadCard_pos(pos_eep, &card);
+C51 COMPILER V9.60.7.0   MAIN                                                              09/08/2025 21:00:07 PAGE 5   
 
- 239   2          {
- 240   3            strcpy(title, id);
- 241   3            strcpy(list[0], stuid);
- 242   3            strcpy(list[1], "MENU         UP");
- 243   3            strcpy(list[2], "BACK       DOWN");
- 244   3            length = 3;
- 245   3            select = NO;
- 246   3            break;
- 247   3          }
- 248   2          }
- 249   1        switch (mode)
- 250   1        {
- 251   2          case MENU: case PN532: case BT: case EEPROM: // 可选菜单的渲染逻辑
- 252   2          {
- 253   3            while (1)
- 254   3            {
- 255   4              // 通过按键调整选中栏
- 256   4              pos = (check_ru() && pos > 0)? (pos - 1): pos;
- 257   4              pos = (check_rd() && pos < length - 1)? (pos + 1): pos;
- 258   4              display_list(title, list, length, pos, select);
- 259   4              if (check_ld())
- 260   4              {
- 261   5                mode = prev_mode;
- 262   5                OLED_Clear();
- 263   5                break;
- 264   5              }
- 265   4              if (check_lu()) // 选中的逻辑
- 266   4              {
- 267   5                switch (mode)
- 268   5                {
- 269   6                  case MENU:
- 270   6                  {
- 271   7                    mode_list[0] = PN532;
- 272   7                    mode_list[1] = BT;
- 273   7                    mode_list[2] = EEPROM;
- 274   7                    mode = mode_list[pos];
- 275   7                    OLED_Clear();
- 276   7                    break;
- 277   7                  }
- 278   6                  case PN532:
- 279   6                  {
- 280   7                    mode_list[0] = PN532READ;
- 281   7                    mode_list[1] = PN532WRITE;
- 282   7                    mode_list[2] = PN532CARD;
- 283   7                    mode_list[3] = PN532P2P;
- 284   7                    mode = mode_list[pos];
- 285   7                    OLED_Clear();
- 286   7                    break;
- 287   7                  }
- 288   6                  case BT:
- 289   6                  {
- 290   7                    mode_list[0] = BTTD;
- 291   7                    mode = mode_list[pos];
- 292   7                    OLED_Clear();
- 293   7                    break;
- 294   7                  }
- 295   6                  case EEPROM: // 读出卡的数据
- 296   6                  {
- 297   7                    strcpy(id, cards[pos]);
- 298   7                    AT24C02_ReadCard_pos(pos, &card);
- 299   7                    strcpy(stuid, card.stuid);
- 300   7                    mode = DATA;
-C51 COMPILER V9.60.7.0   MAIN                                                              09/05/2025 14:42:14 PAGE 6   
+ 239   5      
+ 240   5                  OLED_Clear();
+ 241   5                  OLED_ShowString(0,0,(u8*)"Sending...");
+ 242   5                  OLED_ShowString(0,2,(u8*)"ID:");
+ 243   5                  OLED_ShowString(24,2, card.id);
+ 244   5                  OLED_ShowString(0,4,(u8*)"STU:");
+ 245   5                  OLED_ShowString(32,4, card.stuid);
+ 246   5      
+ 247   5                  BT_SendCardFrame(&card);
+ 248   5      
+ 249   5                  OLED_Clear();
+ 250   5                  OLED_ShowString(0,0,(u8*)"Sent OK");
+ 251   5                  delay_ms(800);
+ 252   5      
+ 253   5                  pos_eep = (pos_eep == 2) ? 0 : (pos_eep + 1);
+ 254   5                  AT24C02_WriteByte(0xFF, pos_eep); delay_ms(50);
+ 255   5              }
+ 256   4      
+ 257   4              if (check_ld())  /* 接收 */
+ 258   4              {
+ 259   5                  OLED_Clear();
+ 260   5                  OLED_ShowString(0,0,(u8*)"Receiving...");
+ 261   5                  if (BT_RecvCardFrame(&rx, 3000))
+ 262   5                  {
+ 263   6                      OLED_Clear();
+ 264   6                      OLED_ShowString(0,0,(u8*)"Recv OK");
+ 265   6                      OLED_ShowString(0,2,(u8*)"ID:");
+ 266   6                      OLED_ShowString(24,2, rx.id);
+ 267   6                      OLED_ShowString(0,4,(u8*)"STU:");
+ 268   6                      OLED_ShowString(32,4, rx.stuid);
+ 269   6                  }
+ 270   5                  else
+ 271   5                  {
+ 272   6                      OLED_Clear();
+ 273   6                      OLED_ShowString(0,0,(u8*)"Recv Timeout");
+ 274   6                  }
+ 275   5                  delay_ms(800);
+ 276   5              }
+ 277   4          }
+ 278   3          break;
+ 279   3      }
+ 280   2          case EEPROM:
+ 281   2          {
+ 282   3            title = "EEPROM";
+ 283   3            AT24C02_ReadAll(cards); // 从 EEPROM 读取所有卡号
+ 284   3            for (i = 0; i < 3; i++)
+ 285   3            {
+ 286   4              strcpy(list[i], cards[i]);
+ 287   4            }
+ 288   3            length = i;
+ 289   3            select = YES;
+ 290   3            break;
+ 291   3          }
+ 292   2          case DATA:
+ 293   2          {
+ 294   3            strcpy(title, id);
+ 295   3            strcpy(list[0], stuid);
+ 296   3            strcpy(list[1], "MENU         UP");
+ 297   3            strcpy(list[2], "BACK       DOWN");
+ 298   3            length = 3;
+ 299   3            select = NO;
+ 300   3            break;
+C51 COMPILER V9.60.7.0   MAIN                                                              09/08/2025 21:00:07 PAGE 6   
 
- 301   7                    OLED_Clear();
- 302   7                    break;
- 303   7                  }
- 304   6                }
- 305   5                break;
- 306   5              }
- 307   4            }
- 308   3            break;
- 309   3          }
- 310   2          default:
- 311   2          {
- 312   3            display_list(title, list, length, pos, select);
- 313   3          }
- 314   2        }
- 315   1      }
- 316          
- 317          void main()
- 318          {
- 319   1        CARD Data = {0};
- 320   1          OLED_Init();      // 初始化 OLED
- 321   1          OLED_Clear();
- 322   1        PN532_Init();
- 323   1        delay_ms(100);
- 324   1        UartInit();
- 325   1        memset(rec_str, 0, sizeof(rec_str));
-*** WARNING C198 IN LINE 325 OF main.c: sizeof returns zero
- 326   1        rec_cnt = 0;
- 327   1        while (1)
- 328   1        {
- 329   2          BUZZER = (check_sw3())? ~BUZZER: BUZZER;
- 330   2          display();
- 331   2        }
- 332   1      }
+ 301   3          }
+ 302   2          }
+ 303   1        switch (mode)
+ 304   1        {
+ 305   2          case MENU: case PN532: case BT: case EEPROM: // 可选菜单的渲染逻辑
+ 306   2          {
+ 307   3            while (1)
+ 308   3            {
+ 309   4              // 通过按键调整选中栏
+ 310   4              pos = (check_ru() && pos > 0)? (pos - 1): pos;
+ 311   4              pos = (check_rd() && pos < length - 1)? (pos + 1): pos;
+ 312   4              display_list(title, list, length, pos, select);
+ 313   4              if (check_ld())
+ 314   4              {
+ 315   5                mode = prev_mode;
+ 316   5                OLED_Clear();
+ 317   5                break;
+ 318   5              }
+ 319   4              if (check_lu()) // 选中的逻辑
+ 320   4              {
+ 321   5                switch (mode)
+ 322   5                {
+ 323   6                  case MENU:
+ 324   6                  {
+ 325   7                    mode_list[0] = PN532;
+ 326   7                    mode_list[1] = BT;
+ 327   7                    mode_list[2] = EEPROM;
+ 328   7                    mode = mode_list[pos];
+ 329   7                    OLED_Clear();
+ 330   7                    break;
+ 331   7                  }
+ 332   6                  case PN532:
+ 333   6                  {
+ 334   7                    mode_list[0] = PN532READ;
+ 335   7                    mode_list[1] = PN532WRITE;
+ 336   7                    mode_list[2] = PN532CARD;
+ 337   7                    mode_list[3] = PN532P2P;
+ 338   7                    mode = mode_list[pos];
+ 339   7                    OLED_Clear();
+ 340   7                    break;
+ 341   7                  }
+ 342   6                  case BT:
+ 343   6                  {
+ 344   7                    mode_list[0] = BTTD;
+ 345   7                    mode = mode_list[pos];
+ 346   7                    OLED_Clear();
+ 347   7                    break;
+ 348   7                  }
+ 349   6                  case EEPROM: // 读出卡的数据
+ 350   6                  {
+ 351   7                    strcpy(id, cards[pos]);
+ 352   7                    AT24C02_ReadCard_pos(pos, &card);
+ 353   7                    strcpy(stuid, card.stuid);
+ 354   7                    mode = DATA;
+ 355   7                    OLED_Clear();
+ 356   7                    break;
+ 357   7                  }
+ 358   6                }
+ 359   5                break;
+ 360   5              }
+ 361   4            }
+ 362   3            break;
+C51 COMPILER V9.60.7.0   MAIN                                                              09/08/2025 21:00:07 PAGE 7   
+
+ 363   3          }
+ 364   2          default:
+ 365   2          {
+ 366   3            display_list(title, list, length, pos, select);
+ 367   3          }
+ 368   2        }
+ 369   1      }
+ 370          
+ 371          void main()
+ 372          {
+ 373   1        CARD Data = {0};
+ 374   1          OLED_Init();      // 初始化 OLED
+ 375   1          OLED_Clear();
+ 376   1        PN532_Init();
+ 377   1        delay_ms(100);
+ 378   1        UartInit();
+ 379   1        memset(rec_str, 0, sizeof(rec_str));
+*** WARNING C198 IN LINE 379 OF main.c: sizeof returns zero
+ 380   1        rec_cnt = 0;
+ 381   1        while (1)
+ 382   1        {
+ 383   2          BUZZER = (check_sw3())? ~BUZZER: BUZZER;
+ 384   2          display();
+ 385   2        }
+ 386   1      }
 
 
 MODULE INFORMATION:   STATIC OVERLAYABLE
-   CODE SIZE        =   1661    ----
-   CONSTANT SIZE    =    435    ----
+   CODE SIZE        =   2081    ----
+   CONSTANT SIZE    =    529    ----
    XDATA SIZE       =   ----    ----
-   PDATA SIZE       =      2      35
+   PDATA SIZE       =      2      76
    DATA SIZE        =   ----    ----
    IDATA SIZE       =   ----     155
    BIT SIZE         =   ----    ----

@@ -1,4 +1,4 @@
-C51 COMPILER V9.60.7.0   BLUETOOTH                                                         09/05/2025 15:34:41 PAGE 1   
+C51 COMPILER V9.60.7.0   BLUETOOTH                                                         09/08/2025 20:58:33 PAGE 1   
 
 
 C51 COMPILER V9.60.7.0, COMPILATION OF MODULE BLUETOOTH
@@ -11,93 +11,286 @@ line level    source
    1          #include "bluetooth.h"
    2          #include "AT24C02.h"
    3          
-   4          // 蓝牙模块初始化
-   5          void BT_Init(void)
-   6          {
-   7   1          // 设置蓝牙通信引脚初始状态
-   8   1          BT_TX = 1;  // 空闲状态为高电平
-   9   1          
-  10   1          // 蓝牙模块一般在上电后自动进入AT命令模式或通信模式
-  11   1          // 此处可以通过发送一些AT命令来配置蓝牙模块
-  12   1          delay_ms(500);  // 等待蓝牙模块稳定
-  13   1      }
-  14          
-  15          // 发送一个字节数据（软件模拟UART发送）
-  16          void BT_SendByte(unsigned char dat)
-  17          {
-  18   1          unsigned char i;
-  19   1          
-  20   1          // 发送起始位
-  21   1          BT_TX = 0;
-  22   1          delay_ms(1);  // 延时约9600bps的一位时间，使用delay_ms代替delay_us
-  23   1          
-  24   1          // 发送8位数据位
-  25   1          for(i = 0; i < 8; i++)
-  26   1          {
-  27   2              BT_TX = (dat & 0x01) ? 1 : 0;  // 从低位开始发送
-  28   2              dat >>= 1;
-  29   2              delay_ms(1);
-  30   2          }
-  31   1          
-  32   1          // 发送停止位
-  33   1          BT_TX = 1;
-  34   1          delay_ms(1);
-  35   1      }
-  36          
-  37          // 发送字符串
-  38          void BT_SendString(unsigned char *str)
-  39          {
-  40   1          while(*str)
-  41   1          {
-  42   2              BT_SendByte(*str++);
-  43   2          }
-  44   1      }
-  45          
-  46          // 发送卡信息到蓝牙
-  47          void BT_SendCardInfo(void)
-  48          {
-  49   1          unsigned char i;
-  50   1          CARD card;
-  51   1          
-  52   1          BT_SendString("Card Info in EEPROM:\r\n");
-  53   1          
-  54   1          // 从EEPROM读取所有卡片信息并通过蓝牙发送
-C51 COMPILER V9.60.7.0   BLUETOOTH                                                         09/05/2025 15:34:41 PAGE 2   
+   4          /* 11.0592MHz：T=1.085us；9600bps 每位≈104.17us -> 约 96 计数；1.5位≈144 计数 */
+   5          #define T0_TH_1BIT   0xFF
+   6          #define T0_TL_1BIT   0xA0  /* 96 */
+   7          #define T0_TH_1P5    0xFF
+   8          #define T0_TL_1P5    0x70  /* 144 */
+   9          
+  10          /* Timer1 1ms 装载（≈0xFC66） */
+  11          #define T1_TH_1MS    0xFC
+  12          #define T1_TL_1MS    0x66
+  13          
+  14          /* 精确等待：使用 T0，调用期间保存并恢复 T0 状态 */
+  15          static void bt_t0_wait_reload(unsigned char th, unsigned char tl)
+  16          {
+  17   1          unsigned char tmod_bak = TMOD;
+  18   1          bit tr0_bak = TR0;
+  19   1          unsigned char th0_bak = TH0;
+  20   1          unsigned char tl0_bak = TL0;
+  21   1          bit tf0_bak = TF0;
+  22   1      
+  23   1          TMOD = (TMOD & 0xF0) | 0x01; /* T0 mode1 */
+  24   1          TR0 = 0;
+  25   1          TH0 = th;
+  26   1          TL0 = tl;
+  27   1          TF0 = 0;
+  28   1          TR0 = 1;
+  29   1          while (!TF0) { /* wait */ }
+  30   1          TR0 = 0;
+  31   1      
+  32   1          /* 恢复 */
+  33   1          TH0 = th0_bak;
+  34   1          TL0 = tl0_bak;
+  35   1          TF0 = tf0_bak;
+  36   1          TR0 = tr0_bak;
+  37   1          TMOD = tmod_bak;
+  38   1      }
+  39          
+  40          static void bt_wait_1bit(void)   { bt_t0_wait_reload(T0_TH_1BIT, T0_TL_1BIT); }
+  41          static void bt_wait_1p5bit(void) { bt_t0_wait_reload(T0_TH_1P5,  T0_TL_1P5 ); }
+  42          
+  43          /* 等待起始位（RX 拉低），使用 T1 做 1ms 计时；整个过程暂时关闭串口中断 ES */
+  44          static bit bt_wait_start_low_ms(unsigned int timeout_ms)
+  45          {
+  46   1          unsigned char tmod_bak = TMOD;
+  47   1          bit tr1_bak = TR1;
+  48   1          unsigned char th1_bak = TH1;
+  49   1          unsigned char tl1_bak = TL1;
+  50   1          bit tf1_bak = TF1;
+  51   1          bit es_bak = ES;
+  52   1      
+  53   1          ES = 0; /* 暂停串口中断，避免我们改动 T1 影响 UART */
+  54   1          TMOD = (TMOD & 0x0F) | 0x10; /* T1 mode1 */
+C51 COMPILER V9.60.7.0   BLUETOOTH                                                         09/08/2025 20:58:33 PAGE 2   
 
-  55   1          for(i = 0; i < 3; i++)
-  56   1          {
-  57   2              AT24C02_ReadCard_pos(i, &card);
-  58   2              
-  59   2              // 发送卡片序号
-  60   2              BT_SendString("Card ");
-  61   2              BT_SendByte('1' + i);
-  62   2              BT_SendString(": ");
-  63   2              
-  64   2              // 发送卡ID
-  65   2              BT_SendString("ID=");
-  66   2              BT_SendString(card.id);
-  67   2              BT_SendString(", ");
-  68   2              
-  69   2              // 发送学号
-  70   2              BT_SendString("Student ID=");
-  71   2              BT_SendString(card.stuid);
-  72   2              BT_SendString("\r\n");
-  73   2              
-  74   2              delay_ms(100);  // 短暂延时，避免数据发送太快
-  75   2          }
-  76   1          
-  77   1          BT_SendString("Transfer complete.\r\n");
-  78   1      }
+  55   1          TR1 = 0;
+  56   1          TH1 = T1_TH_1MS;
+  57   1          TL1 = T1_TL_1MS;
+  58   1          TF1 = 0;
+  59   1          TR1 = 1;
+  60   1      
+  61   1          while (timeout_ms)
+  62   1          {
+  63   2              if (BT_RX == 0)
+  64   2              {
+  65   3                  /* 恢复 T1 与 ES */
+  66   3                  TR1 = 0;
+  67   3                  TH1 = th1_bak; TL1 = tl1_bak; TF1 = tf1_bak; TR1 = tr1_bak; TMOD = tmod_bak;
+  68   3                  ES = es_bak;
+  69   3                  return 1;
+  70   3              }
+  71   2              if (TF1)
+  72   2              {
+  73   3                  TF1 = 0;
+  74   3                  TH1 = T1_TH_1MS;
+  75   3                  TL1 = T1_TL_1MS;
+  76   3                  timeout_ms--;
+  77   3              }
+  78   2          }
+  79   1      
+  80   1          TR1 = 0;
+  81   1          TH1 = th1_bak; TL1 = tl1_bak; TF1 = tf1_bak; TR1 = tr1_bak; TMOD = tmod_bak;
+  82   1          ES = es_bak;
+  83   1          return 0;
+  84   1      }
+  85          
+  86          /* 文件内私有：8 位求和校验（注意：不要用 data 作为形参名，避免与 C51 关键字冲突） */
+  87          static unsigned char bt_checksum8(const unsigned char* buf, unsigned char len)
+  88          {
+  89   1          unsigned int i, sum = 0;
+  90   1          for (i = 0; i < len; i++) sum += buf[i];
+  91   1          return (unsigned char)(sum & 0xFF);
+  92   1      }
+  93          
+  94          void BT_Init(void)
+  95          {
+  96   1          BT_TX = 1;      /* 空闲高电平 */
+  97   1          delay_ms(500);  /* 模块上电稳定 */
+  98   1      }
+  99          
+ 100          /* 严格 9600bps 发送一个字节（LSB first） */
+ 101          void BT_SendByte(unsigned char dat)
+ 102          {
+ 103   1          bit ea_bak = EA;
+ 104   1          unsigned char i;
+ 105   1      
+ 106   1          EA = 0;         /* 防止中断抖动影响位时序 */
+ 107   1          /* 起始位 */
+ 108   1          BT_TX = 0;      bt_wait_1bit();
+ 109   1          /* 8 数据位 */
+ 110   1          for (i = 0; i < 8; i++)
+ 111   1          {
+ 112   2              BT_TX = (dat & 0x01) ? 1 : 0;
+ 113   2              bt_wait_1bit();
+ 114   2              dat >>= 1;
+ 115   2          }
+ 116   1          /* 停止位 */
+C51 COMPILER V9.60.7.0   BLUETOOTH                                                         09/08/2025 20:58:33 PAGE 3   
+
+ 117   1          BT_TX = 1;      bt_wait_1bit();
+ 118   1          EA = ea_bak;
+ 119   1      }
+ 120          
+ 121          void BT_SendBuffer(const unsigned char* buf, unsigned int len)
+ 122          {
+ 123   1          unsigned int i;
+ 124   1          for (i = 0; i < len; i++) BT_SendByte(buf[i]);
+ 125   1      }
+ 126          
+ 127          void BT_SendString(unsigned char *str)
+ 128          {
+ 129   1          while (*str) BT_SendByte(*str++);
+ 130   1      }
+ 131          
+ 132          /* 带超时接收一个字节；检测起始位 -> 1.5位对齐 -> 逐位采样 */
+ 133          bit BT_RecvByteTimeout(unsigned char* out, unsigned int timeout_ms)
+ 134          {
+ 135   1          unsigned char i, val = 0;
+ 136   1          bit ea_bak;
+ 137   1      
+ 138   1          if (!bt_wait_start_low_ms(timeout_ms)) return 0;
+ 139   1      
+ 140   1          ea_bak = EA;
+ 141   1          EA = 0;
+ 142   1          bt_wait_1p5bit(); /* 对齐位中心 */
+ 143   1      
+ 144   1          for (i = 0; i < 8; i++)
+ 145   1          {
+ 146   2              /* 采样 LSB first：右移，最高位承接当前位 */
+ 147   2              val >>= 1;
+ 148   2              if (BT_RX) val |= 0x80;
+ 149   2              bt_wait_1bit();
+ 150   2          }
+ 151   1          /* 丢弃停止位时隙 */
+ 152   1          bt_wait_1bit();
+ 153   1          EA = ea_bak;
+ 154   1      
+ 155   1          *out = val;
+ 156   1          return 1;
+ 157   1      }
+ 158          
+ 159          /* 构造并发送 CARD 帧 */
+ 160          bit BT_SendCardFrame(const CARD* card)
+ 161          {
+ 162   1          unsigned char frame[BT_FRAME_LEN];
+ 163   1          unsigned char i, cks, *p = frame;
+ 164   1      
+ 165   1          *p++ = BT_HDR0;
+ 166   1          *p++ = BT_HDR1;
+ 167   1          *p++ = BT_TYPE_CARD;
+ 168   1          *p++ = BT_PAYLOAD_LEN;
+ 169   1          for (i = 0; i < ID_LEN; i++)    *p++ = card->id[i];
+ 170   1          for (i = 0; i < STUID_LEN; i++) *p++ = card->stuid[i];
+ 171   1          cks = bt_checksum8(&frame[2], (unsigned char)(1 + 1 + BT_PAYLOAD_LEN));
+ 172   1          *p++ = cks;
+ 173   1      
+ 174   1          BT_SendBuffer(frame, sizeof(frame));
+ 175   1          return 1;
+ 176   1      }
+ 177          
+ 178          /* 在 timeout_ms 内接收一帧 CARD */
+C51 COMPILER V9.60.7.0   BLUETOOTH                                                         09/08/2025 20:58:33 PAGE 4   
+
+ 179          bit BT_RecvCardFrame(CARD* out, unsigned int timeout_ms)
+ 180          {
+ 181   1          unsigned char b, hdr = 0;
+ 182   1          unsigned char type, len, i;
+ 183   1          unsigned char payload[BT_PAYLOAD_LEN];
+ 184   1          unsigned char cks, cks_calc;
+ 185   1      
+ 186   1          /* 逐字节接收，带“每字节预算” */
+ 187   1          while (timeout_ms)
+ 188   1          {
+ 189   2              unsigned int budget = (timeout_ms > 200) ? 200 : timeout_ms;
+ 190   2              if (!BT_RecvByteTimeout(&b, budget)) return 0;
+ 191   2              timeout_ms = (budget <= timeout_ms) ? (timeout_ms - budget) : 0;
+ 192   2      
+ 193   2              if (!hdr)
+ 194   2              {
+ 195   3                  if (b == BT_HDR0) hdr = 1;
+ 196   3              }
+ 197   2              else
+ 198   2              {
+ 199   3                  if (b == BT_HDR1) break;
+ 200   3                  else hdr = (b == BT_HDR0) ? 1 : 0;
+ 201   3              }
+ 202   2          }
+ 203   1          if (!timeout_ms) return 0;
+ 204   1      
+ 205   1          /* Type */
+ 206   1          if (!BT_RecvByteTimeout(&type, 200)) return 0;
+ 207   1          /* Len */
+ 208   1          if (!BT_RecvByteTimeout(&len, 200)) return 0;
+ 209   1          if (type != BT_TYPE_CARD || len != BT_PAYLOAD_LEN) return 0;
+ 210   1      
+ 211   1          /* Payload */
+ 212   1          for (i = 0; i < BT_PAYLOAD_LEN; i++)
+ 213   1          {
+ 214   2              if (!BT_RecvByteTimeout(&payload[i], 200)) return 0;
+ 215   2          }
+ 216   1          /* Checksum */
+ 217   1          if (!BT_RecvByteTimeout(&cks, 200)) return 0;
+ 218   1      
+ 219   1          cks_calc  = bt_checksum8(&type, 1);
+ 220   1          cks_calc += bt_checksum8(&len, 1);
+ 221   1          cks_calc += bt_checksum8(payload, BT_PAYLOAD_LEN);
+ 222   1          if (cks_calc != cks) return 0;
+ 223   1      
+ 224   1          /* 回填 CARD */
+ 225   1          for (i = 0; i < ID_LEN; i++) out->id[i] = payload[i];
+ 226   1          for (i = 0; i < STUID_LEN; i++) out->stuid[i] = payload[ID_LEN + i];
+ 227   1      
+ 228   1          return 1;
+ 229   1      }
+ 230          
+ 231          /* 十六进制发送（调试友好，不依赖字符串结束符） */
+ 232          static void bt_send_hex(const unsigned char* buf, unsigned char len)
+ 233          {
+ 234   1          unsigned char i;
+ 235   1          for (i = 0; i < len; i++)
+ 236   1          {
+ 237   2              unsigned char hi = (buf[i] >> 4) & 0x0F;
+ 238   2              unsigned char lo = buf[i] & 0x0F;
+ 239   2              BT_SendByte(hi < 10 ? ('0' + hi) : ('A' + hi - 10));
+ 240   2              BT_SendByte(lo < 10 ? ('0' + lo) : ('A' + lo - 10));
+C51 COMPILER V9.60.7.0   BLUETOOTH                                                         09/08/2025 20:58:33 PAGE 5   
+
+ 241   2          }
+ 242   1      }
+ 243          
+ 244          void BT_SendCardInfo(void)
+ 245          {
+ 246   1          unsigned char i;
+ 247   1          CARD card;
+ 248   1      
+ 249   1          BT_SendString("Card Info in EEPROM:\r\n");
+ 250   1          for (i = 0; i < 3; i++)
+ 251   1          {
+ 252   2              AT24C02_ReadCard_pos(i, &card);
+ 253   2      
+ 254   2              BT_SendString("Card ");
+ 255   2              BT_SendByte('1' + i);
+ 256   2              BT_SendString(": ID=");
+ 257   2              bt_send_hex(card.id, ID_LEN);
+ 258   2              BT_SendString(", STU=");
+ 259   2              bt_send_hex(card.stuid, STUID_LEN);
+ 260   2              BT_SendString("\r\n");
+ 261   2      
+ 262   2              delay_ms(50);
+ 263   2          }
+ 264   1          BT_SendString("Transfer complete.\r\n");
+ 265   1      }
 
 
 MODULE INFORMATION:   STATIC OVERLAYABLE
-   CODE SIZE        =    259    ----
-   CONSTANT SIZE    =     75    ----
+   CODE SIZE        =   1419    ----
+   CONSTANT SIZE    =     66    ----
    XDATA SIZE       =   ----    ----
-   PDATA SIZE       =   ----      26
+   PDATA SIZE       =   ----     112
    DATA SIZE        =   ----    ----
    IDATA SIZE       =   ----    ----
-   BIT SIZE         =   ----    ----
+   BIT SIZE         =   ----       7
 END OF MODULE INFORMATION.
 
 

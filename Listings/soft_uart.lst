@@ -1,0 +1,140 @@
+C51 COMPILER V9.60.7.0   SOFT_UART                                                         09/08/2025 19:15:10 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE SOFT_UART
+OBJECT MODULE PLACED IN .\Objects\soft_uart.obj
+COMPILER INVOKED BY: E:\Keil\C51\BIN\C51.EXE soft_uart.c COMPACT OPTIMIZE(8,SPEED) BROWSE INCDIR(C:\Program Files\Keil_v
+                    -5\C51\INC) DEBUG OBJECTEXTEND PRINT(.\Listings\soft_uart.lst) TABS(2) OBJECT(.\Objects\soft_uart.obj)
+
+line level    source
+
+   1          #include "soft_uart.h"
+*** ERROR C141 IN LINE 21 OF utils.h: syntax error near ',', expected '<id>'
+   2          
+   3          /* 11.0592MHz 下 9600bps 位宽约 104.167us
+   4             8051 计数周期约 1.085us -> 每位 ~96 个计数
+   5             Timer0 mode1: 16位定时器，装载值 = 65536 - 96 = 0xFFA0
+   6             半位(0.5) = 48 计数，1.5位 = 144 计数 -> 0xFF90, 0xFF70
+   7          */
+   8          #define T0_LOAD_1BIT_TH  0xFF
+   9          #define T0_LOAD_1BIT_TL  0xA0  /* 96 */
+  10          #define T0_LOAD_1P5_TH   0xFF
+  11          #define T0_LOAD_1P5_TL   0x70  /* 144 */
+  12          
+  13          static void t0_wait_reload(u8 th, u8 tl)
+  14          {
+  15   1          TR0 = 0;
+  16   1          TH0 = th;
+  17   1          TL0 = tl;
+  18   1          TF0 = 0;
+  19   1          TR0 = 1;
+  20   1          while (!TF0) { /* wait overflow */ }
+  21   1          TR0 = 0;
+  22   1      }
+  23          
+  24          static void t0_wait_1bit(void)   { t0_wait_reload(T0_LOAD_1BIT_TH, T0_LOAD_1BIT_TL); }
+  25          static void t0_wait_1p5bit(void) { t0_wait_reload(T0_LOAD_1P5_TH,  T0_LOAD_1P5_TL);  }
+  26          
+  27          void SUART_Init(void)
+  28          {
+  29   1          /* TX 线空闲为高 */
+  30   1          BT_TX = 1;
+  31   1      
+  32   1          /* Timer0 设置为 16 位定时器模式，保留 T1 */
+  33   1          TMOD = (TMOD & 0xF0) | 0x01;
+  34   1          TR0 = 0;
+  35   1          TF0 = 0;
+  36   1      }
+  37          
+  38          void SUART_SendByte(u8 b)
+  39          {
+  40   1          bit ea_bak = EA;
+  41   1          EA = 0;             /* 保证位时序不被中断打断 */
+  42   1      
+  43   1          /* 起始位：低 */
+  44   1          BT_TX = 0;
+  45   1          t0_wait_1bit();
+  46   1      
+  47   1          /* 数据位：8 位 LSB first */
+  48   1          {
+  49   2              u8 i;
+  50   2              for (i = 0; i < 8; i++)
+  51   2              {
+  52   3                  BT_TX = (b & 0x01) ? 1 : 0;
+  53   3                  t0_wait_1bit();
+C51 COMPILER V9.60.7.0   SOFT_UART                                                         09/08/2025 19:15:10 PAGE 2   
+
+  54   3                  b >>= 1;
+  55   3              }
+  56   2          }
+  57   1      
+  58   1          /* 停止位：高 */
+  59   1          BT_TX = 1;
+  60   1          t0_wait_1bit();
+  61   1      
+  62   1          EA = ea_bak;
+  63   1      }
+  64          
+  65          void SUART_SendBuffer(const u8* buf, u16 len)
+  66          {
+  67   1          u16 i;
+  68   1          for (i = 0; i < len; i++) SUART_SendByte(buf[i]);
+  69   1      }
+  70          
+  71          /* 轮询等待起始位，带毫秒超时（Timer1 1ms 轮询） */
+  72          static bit wait_start_low(u16 timeout_ms)
+  73          {
+  74   1          /* 启动 T1 的 1ms 轮询节拍（与 delay_ms 相同配置） */
+  75   1          TMOD = (TMOD & 0x0F) | 0x10; /* T1 mode1 */
+  76   1          TR1 = 0;
+  77   1          TH1 = 0xFC; TL1 = 0x66;
+  78   1          TF1 = 0;
+  79   1          TR1 = 1;
+  80   1      
+  81   1          while (timeout_ms)
+  82   1          {
+  83   2              /* 紧凑轮询 RX，避免漏沿 */
+  84   2              if (BT_RX == 0) { TR1 = 0; return 1; }
+  85   2      
+  86   2              /* 每经过 1ms，减少一次超时计数 */
+  87   2              if (TF1)
+  88   2              {
+  89   3                  TF1 = 0;
+  90   3                  TH1 = 0xFC; TL1 = 0x66;
+  91   3                  timeout_ms--;
+  92   3              }
+  93   2          }
+  94   1          TR1 = 0;
+  95   1          return 0;
+  96   1      }
+  97          
+  98          bit SUART_RecvByteTimeout(u8* out, u16 timeout_ms)
+  99          {
+ 100   1          u8 i, val = 0;
+ 101   1          bit ea_bak = EA;
+ 102   1          /* 等待起始位到来（低电平），超时返回 */
+ 103   1          if (!wait_start_low(timeout_ms)) return 0;
+ 104   1      
+ 105   1          EA = 0; /* 采样阶段屏蔽中断，保证时序 */
+ 106   1          /* 对齐到位中心：1.5 位延时 */
+ 107   1          t0_wait_1p5bit();
+ 108   1      
+ 109   1          /* 逐位采样（LSB first） */
+ 110   1          for (i = 0; i < 8; i++)
+ 111   1          {
+ 112   2              val >>= 1;
+ 113   2              if (BT_RX) val |= 0x80; /* 因为右移，所以最高位承接 */
+ 114   2              t0_wait_1bit();
+ 115   2          }
+C51 COMPILER V9.60.7.0   SOFT_UART                                                         09/08/2025 19:15:10 PAGE 3   
+
+ 116   1      
+ 117   1          /* 停止位时间（丢弃） */
+ 118   1          t0_wait_1bit();
+ 119   1          EA = ea_bak;
+ 120   1      
+ 121   1          *out = val;
+ 122   1          return 1;
+ 123   1      }
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  1 ERROR(S)
